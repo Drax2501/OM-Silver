@@ -314,6 +314,14 @@ class DirectoryPage(BasePage):
         button_layout.addStretch()
 
         close_button = QPushButton("Close")
+        close_button.setStyleSheet("""
+            QPushButton {
+
+                border-radius: 6px;
+                padding: 9px 18px;
+            }
+        """)
+
         close_button.clicked.connect(dialog.accept)
         button_layout.addWidget(close_button)
 
