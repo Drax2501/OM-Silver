@@ -1,4 +1,3 @@
-
 import sqlite3
 
 from PySide6.QtCore import Qt, QDate, Signal
@@ -78,17 +77,7 @@ def insert_sale_ledger_entries(
     fine_total,
     amount_to_store,
 ):
-    """
-    Store each sale as one Ledger row.
-
-    Cash/Credit: amount only.
-    Silver: fine silver and making charges in the same row.
-    Gold: fine gold and making charges in the same row.
-
-    Zero-value components are stored as NULL, so they can
-    remain blank in the ledger display.
-    """
-
+    """Store each sale as one Ledger row[cite: 3]."""
     required_columns = {
         "Customer ID",
         "Vendor ID",
@@ -121,7 +110,6 @@ def insert_sale_ledger_entries(
         transaction_id,
     )
 
-    # Cash and Credit: one amount entry, only if non-zero.
     if settlement in ("Cash", "Credit"):
         if full_amount <= 0:
             return
@@ -145,7 +133,6 @@ def insert_sale_ledger_entries(
 
         return
 
-    # Silver: fine silver and making charges in ONE row.
     if settlement == "Silver":
         if fine_total <= 0 and amount_to_store <= 0:
             return
@@ -170,7 +157,6 @@ def insert_sale_ledger_entries(
             amount_to_store if amount_to_store > 0 else None,
         ))
 
-    # Gold: fine gold and making charges in ONE row.
     elif settlement == "Gold":
         if fine_total <= 0 and amount_to_store <= 0:
             return
@@ -196,7 +182,6 @@ def insert_sale_ledger_entries(
         ))
 
 
-
 def insert_purchase_ledger_entries(
     cursor,
     transaction_id,
@@ -207,7 +192,7 @@ def insert_purchase_ledger_entries(
     fine_total,
     amount_to_store,
 ):
-    """Store a purchase in the Ledger credit columns."""
+    """Store a purchase in the Ledger credit columns[cite: 3]."""
     required_columns = {
         "Customer ID", "Vendor ID", "Other Account ID", "Transaction ID",
         "Display A/c Credit", "Amount Credit",
@@ -272,6 +257,64 @@ def insert_purchase_ledger_entries(
         ))
 
 
+def insert_exchange_ledger_entries(
+    cursor,
+    transaction_id,
+    customer_id,
+    vendor_id,
+    direction,
+    settlement,
+    cash_amount,
+    new_fine_total,
+    old_fine_total,
+    exchange_fee,
+):
+    """Store exchange transaction in Ledger with direction, silver fine weights, cash/credit, and exchange fee[cite: 3]."""
+    account_values = (customer_id, vendor_id, None, transaction_id)
+    cash_display = f"Exchange ({settlement})"
+
+    if direction == "Debit":
+        cursor.execute("""
+            INSERT INTO Ledger (
+                "Customer ID", "Vendor ID", "Other Account ID", "Transaction ID",
+                "Silver Display Debit", "Silver Debit",
+                "Silver Display Credit", "Silver Credit",
+                "Display A/c Debit", "Amount Debit",
+                "Display A/c Credit", "Amount Credit"
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            *account_values,
+            "Exchange (New)" if new_fine_total > 0 else None,
+            new_fine_total if new_fine_total > 0 else 0,
+            "Exchange (Old)" if old_fine_total > 0 else None,
+            old_fine_total if old_fine_total > 0 else 0,
+            cash_display if cash_amount != 0 else None,
+            abs(cash_amount) if cash_amount != 0 else 0,
+            "Exchange Fee" if exchange_fee != 0 else None,
+            abs(exchange_fee) if exchange_fee != 0 else 0,
+        ))
+    else:
+        cursor.execute("""
+            INSERT INTO Ledger (
+                "Customer ID", "Vendor ID", "Other Account ID", "Transaction ID",
+                "Silver Display Credit", "Silver Credit",
+                "Silver Display Debit", "Silver Debit",
+                "Display A/c Credit", "Amount Credit",
+                "Display A/c Debit", "Amount Debit"
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            *account_values,
+            "Exchange (New)" if new_fine_total > 0 else None,
+            new_fine_total if new_fine_total > 0 else 0,
+            "Exchange (Old)" if old_fine_total > 0 else None,
+            old_fine_total if old_fine_total > 0 else 0,
+            cash_display if cash_amount != 0 else None,
+            abs(cash_amount) if cash_amount != 0 else 0,
+            "Exchange Fee" if exchange_fee != 0 else None,
+            abs(exchange_fee) if exchange_fee != 0 else 0,
+        ))
+
+
 # ============================================================
 # TRANSACTIONS PAGE
 # ============================================================
@@ -302,12 +345,8 @@ class TransactionsPage(BasePage):
         self.payment_button = QPushButton("New Payment")
 
         self.sale_button.clicked.connect(self.open_new_sale)
-
         self.purchase_button.clicked.connect(self.open_new_purchase)
-
-        self.exchange_button.clicked.connect(
-            lambda: self.not_implemented("Exchange")
-        )
+        self.exchange_button.clicked.connect(self.open_new_exchange)
 
         self.payment_button.clicked.connect(
             lambda: self.not_implemented("Payment")
@@ -336,17 +375,8 @@ class TransactionsPage(BasePage):
             "Action",
         ])
 
-        # 1. Get the horizontal header object
         header = self.transactions_table.horizontalHeader()
-
-        # 2. Set the default alignment to left (and vertically centered)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-        self.transactions_table.setStyleSheet("""
-            QHeaderView::section {
-            }
-        """)
-        
 
         self.transactions_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
@@ -361,11 +391,9 @@ class TransactionsPage(BasePage):
         )
 
         self.transactions_table.verticalHeader().setVisible(False)
-
         self.transactions_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
-
         self.transactions_table.setAlternatingRowColors(True)
 
         layout.addWidget(self.transactions_table, 1)
@@ -454,7 +482,6 @@ class TransactionsPage(BasePage):
 
                 view_button = QPushButton("View")
                 view_button.setFixedSize(55, 26)
-
                 view_button.setStyleSheet("""
                     QPushButton {
                         padding: 0 8px;
@@ -482,23 +509,22 @@ class TransactionsPage(BasePage):
 
     def open_new_sale(self):
         dialog = SaleDialog(self)
-
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh_transactions()
 
     def open_new_purchase(self):
         dialog = PurchaseDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_transactions()
 
+    def open_new_exchange(self):
+        dialog = ExchangeDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh_transactions()
 
     def view_transaction(self, transaction_id):
         dialog = TransactionDetailsDialog(transaction_id, self)
-
-        dialog.transaction_changed.connect(
-            self.refresh_transactions
-        )
-
+        dialog.transaction_changed.connect(self.refresh_transactions)
         dialog.exec()
 
 
@@ -514,13 +540,8 @@ class TransactionDetailsDialog(QDialog):
         super().__init__(parent)
 
         self.transaction_id = transaction_id
-
-        self.setWindowTitle(
-            f"Transaction #{transaction_id}"
-        )
-
+        self.setWindowTitle(f"Transaction #{transaction_id}")
         self.resize(1050, 650)
-
         self.layout_main = QVBoxLayout(self)
 
         self.load_details()
@@ -635,7 +656,7 @@ class TransactionDetailsDialog(QDialog):
                 money(transaction["Total Amount"]),
             ),
             (
-                "Fine Metal Weight",
+                "Total Weight Exchange",
                 f'{number(transaction["Total Weight Exchange"]):,.2f} g',
             ),
             (
@@ -663,25 +684,22 @@ class TransactionDetailsDialog(QDialog):
             QLabel("<h3>Transaction Items</h3>")
         )
 
-        table = QTableWidget(0, 8)
+        table = QTableWidget(0, 7)
 
         table.setHorizontalHeaderLabels([
+            "Section",
             "Item",
-            "Rate (₹/kg)",
             "Gross (g)",
             "Touch (%)",
             "Fine (g)",
-            "Making Rate (₹/kg)",
             "Discount (₹)",
             "Amount (₹)",
         ])
 
         table.verticalHeader().setVisible(False)
-
         table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
-
         table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
@@ -690,12 +708,11 @@ class TransactionDetailsDialog(QDialog):
 
         for index, row in enumerate(item_rows):
             values = [
+                row["Section"] or "",
                 row["Item_name"] or "",
-                f'₹{number(row["Rate"]):,.0f}',
                 f'{number(row["Gross_weight"]):,.2f}',
                 f'{number(row["Tounch"]):,.2f}%',
                 f'{number(row["Net_weight"]):,.2f}',
-                f'₹{number(row["Making"]):,.0f}',
                 money(row["Discount"]),
                 money(row["Amount"]),
             ]
@@ -733,20 +750,16 @@ class TransactionDetailsDialog(QDialog):
         self.close_button = QPushButton("Close")
 
         self.edit_button.setEnabled(
-            transaction_type in ("Sale", "Purchase")
+            transaction_type in ("Sale", "Purchase", "Exchange")
         )
 
-        self.edit_button.clicked.connect(
-            self.edit_transaction
-        )
+        if transaction_type == "Exchange":
+            self.edit_button.clicked.connect(self.edit_exchange)
+        else:
+            self.edit_button.clicked.connect(self.edit_transaction)
 
-        self.delete_button.clicked.connect(
-            self.delete_transaction
-        )
-
-        self.close_button.clicked.connect(
-            self.accept
-        )
+        self.delete_button.clicked.connect(self.delete_transaction)
+        self.close_button.clicked.connect(self.accept)
 
         buttons.addWidget(self.edit_button)
         buttons.addWidget(self.delete_button)
@@ -768,6 +781,12 @@ class TransactionDetailsDialog(QDialog):
             transaction_id=self.transaction_id,
         )
 
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.transaction_changed.emit()
+            self.load_details()
+
+    def edit_exchange(self):
+        dialog = ExchangeDialog(self, transaction_id=self.transaction_id)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.transaction_changed.emit()
             self.load_details()
@@ -811,7 +830,6 @@ class TransactionDetailsDialog(QDialog):
                     self.transaction_changed.emit()
                     return
 
-                # Delete ledger entries before the transaction they reference.
                 if get_table_columns(cursor, "Ledger"):
                     cursor.execute(
                         'DELETE FROM Ledger WHERE "Transaction ID" = ?',
@@ -858,48 +876,31 @@ class TransactionDetailsDialog(QDialog):
 # ============================================================
 
 class SaleDialog(QDialog):
-
     def __init__(self, parent=None, transaction_id=None):
         super().__init__(parent)
-
         self.transaction_id = transaction_id
         self.read_only = False
         self.item_rows = []
         self.saved = False
 
-        self.setWindowTitle(
-            "Edit Sale" if transaction_id else "New Sale"
-        )
-
+        self.setWindowTitle("Edit Sale" if transaction_id else "New Sale")
         self.resize(1250, 760)
         self.setMinimumSize(950, 600)
-
         self.build_form()
 
         if transaction_id is not None:
             self.load_transaction(transaction_id)
-
         else:
             self.add_item_row()
-
         self.recalculate_totals()
 
     def build_form(self):
         layout = QVBoxLayout(self)
-
-        layout.addWidget(
-            QLabel("<h2>Sale Transaction</h2>")
-        )
-
-        layout.addWidget(
-            QLabel(
-                "Weights are in grams. Rate and making are in rupees per kg."
-            )
-        )
+        layout.addWidget(QLabel("<h2>Sale Transaction</h2>"))
+        layout.addWidget(QLabel("Weights are in grams. Rate and making are in rupees per kg."))
 
         details = QFrame()
         details.setFrameShape(QFrame.Shape.StyledPanel)
-
         form = QFormLayout(details)
 
         self.date_input = QDateEdit()
@@ -908,106 +909,80 @@ class SaleDialog(QDialog):
         self.date_input.setDate(QDate.currentDate())
 
         self.party_type = QComboBox()
-        self.party_type.addItems([
-            "Customer",
-            "Vendor",
-        ])
-
-        self.party_type.currentIndexChanged.connect(
-            self.refresh_parties
-        )
-
+        self.party_type.addItems(["Customer", "Vendor"])
+        self.party_type.currentIndexChanged.connect(self.refresh_parties)
         self.party_input = QComboBox()
 
         self.settlement_input = QComboBox()
-        self.settlement_input.addItems([
-            "Cash",
-            "Credit",
-            "Silver",
-            "Gold",
-        ])
-
-        self.settlement_input.currentIndexChanged.connect(
-            self.recalculate_totals
-        )
-
-        self.settlement_input.currentTextChanged.connect(
-            self.update_rate_fields
-        )
+        self.settlement_input.addItems(["Cash", "Credit", "Silver", "Gold"])
+        self.settlement_input.currentIndexChanged.connect(self.recalculate_totals)
+        self.settlement_input.currentTextChanged.connect(self.update_rate_fields)
 
         form.addRow("Date", self.date_input)
         form.addRow("Party Type", self.party_type)
         form.addRow("Party", self.party_input)
         form.addRow("Settlement", self.settlement_input)
-
         layout.addWidget(details)
-
         self.refresh_parties()
 
         heading_row = QHBoxLayout()
-        heading_row.addWidget(
-            QLabel("<h3>Items</h3>")
-        )
+        heading_row.addWidget(QLabel("<h3>Items</h3>"))
         heading_row.addStretch()
-
         self.add_button = QPushButton("+ Add Item")
-        self.add_button.clicked.connect(
-            self.add_item_row
-        )
-
+        self.add_button.clicked.connect(self.add_item_row)
         heading_row.addWidget(self.add_button)
         layout.addLayout(heading_row)
 
         self.items_table = QTableWidget(0, 11)
-
         self.items_table.setHorizontalHeaderLabels([
-            "Item",
-            "Rate ₹/kg",
-            "Gross g",
-            "Touch %",
-            "Fine g",
-            "Making ₹/kg",
-            "Making ₹",
-            "Calculated ₹",
-            "Actual Sale ₹",
-            "Discount ₹",
-            "Action",
+            "Item", "Rate ₹/kg", "Gross g", "Touch %", "Fine g",
+            "Making ₹/kg", "Making ₹", "Calculated ₹", "Actual Sale ₹", "Discount ₹", "Action",
         ])
-
+        sales_header = self.items_table.horizontalHeader()
+        sales_header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.setAlternatingRowColors(True)
         self.items_table.setWordWrap(False)
-
-        self.items_table.setHorizontalScrollMode(
-            QAbstractItemView.ScrollMode.ScrollPerPixel
-        )
-
-        self.items_table.setVerticalScrollMode(
-            QAbstractItemView.ScrollMode.ScrollPerPixel
-        )
-
-        self.items_table.verticalHeader().setDefaultSectionSize(48)
-
-        header = self.items_table.horizontalHeader()
-        header.setMinimumSectionSize(75)
-        header.setSectionResizeMode(
-            QHeaderView.ResizeMode.Interactive
-        )
-
-        for column, width in enumerate((
-            145, 95, 90, 85, 80, 110, 100, 120, 120, 105, 95
-        )):
-            self.items_table.setColumnWidth(
-                column,
-                width,
-            )
-
-        header.setStretchLastSection(True)
+        self.items_table.setStyleSheet("""
+                QTableWidget::item {
+                    padding: 0px 0px;
+                    margin: 2px;
+                }
+                QComboBox, QDoubleSpinBox {
+                    background-color: #FFFFFF;
+                    color: #302B2A;
+                    border: 0px solid #DCD6D2;
+                    border-radius: 0px;
+                    padding: 0px 0px;
+                    min-height: 20px;
+                }
+                QComboBox::drop-down {
+                    width: 0px;
+                    border: none;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                }
+                QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                    width: 0px;
+                    border: none;
+                }
+                QPushButton {
+                    border: none;
+                    background-color: #FEE4E2;
+                    color: #B42318;
+                    border-radius: 0px;
+                    padding: 0px 0px;
+                    min-height: 20px;
+                }
+                QPushButton:hover {
+                    background-color: #FECDCA;
+                }
+                """)
         layout.addWidget(self.items_table, 1)
 
         totals = QFrame()
         totals.setFrameShape(QFrame.Shape.StyledPanel)
-
         grid = QGridLayout(totals)
 
         self.gross_label = QLabel("0.00 g")
@@ -1029,123 +1004,48 @@ class SaleDialog(QDialog):
         ]
 
         for row, column, label, value in total_fields:
-            grid.addWidget(
-                QLabel(f"<b>{label}</b>"),
-                row,
-                column,
-            )
-
-            grid.addWidget(
-                value,
-                row,
-                column + 1,
-            )
+            grid.addWidget(QLabel(f"<b>{label}</b>"), row, column)
+            grid.addWidget(value, row, column + 1)
 
         layout.addWidget(totals)
 
-        note = QLabel(
-            "Fine weight = gross × touch ÷ 100. "
-            "Silver value = fine weight × rate ÷ 1,000. "
-            "Making charge = gross × making rate ÷ 1,000."
-        )
-
-        note.setWordWrap(True)
-        layout.addWidget(note)
-
         buttons = QHBoxLayout()
         buttons.addStretch()
-
         self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(
-            self.reject
-        )
-
+        self.cancel_button.clicked.connect(self.reject)
         self.save_button = QPushButton("Save Sale")
-        self.save_button.clicked.connect(
-            self.save_sale
-        )
-
+        self.save_button.clicked.connect(self.save_sale)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.save_button)
-
         layout.addLayout(buttons)
 
     def refresh_parties(self, *_):
         self.party_input.clear()
-
         try:
             with get_connection() as conn:
                 if self.party_type.currentText() == "Customer":
-                    rows = conn.execute("""
-                        SELECT
-                            "Customer ID",
-                            Name,
-                            "Shop Name"
-                        FROM Customers
-                        ORDER BY "Shop Name", Name
-                    """).fetchall()
-
+                    rows = conn.execute('SELECT "Customer ID", Name, "Shop Name" FROM Customers ORDER BY "Shop Name", Name').fetchall()
                 else:
-                    rows = conn.execute("""
-                        SELECT
-                            ID,
-                            Name,
-                            "Firm Name"
-                        FROM Vendors
-                        ORDER BY "Firm Name", Name
-                    """).fetchall()
+                    rows = conn.execute('SELECT ID, Name, "Firm Name" FROM Vendors ORDER BY "Firm Name", Name').fetchall()
 
             for party_id, name, firm in rows:
-                display = (
-                    (firm or "").strip()
-                    or (name or "").strip()
-                )
-
-                if (
-                    name
-                    and firm
-                    and name.casefold() != firm.casefold()
-                ):
+                display = (firm or "").strip() or (name or "").strip()
+                if name and firm and name.casefold() != firm.casefold():
                     display = f"{display} — {name}"
-
-                self.party_input.addItem(
-                    display or "Unnamed",
-                    party_id,
-                )
-
+                self.party_input.addItem(display or "Unnamed", party_id)
         except sqlite3.Error as exc:
-            QMessageBox.critical(
-                self,
-                "Database Error",
-                f"Could not load parties:\n{exc}",
-            )
+            QMessageBox.critical(self, "Database Error", f"Could not load parties:\n{exc}")
 
     def add_item_row(self, *_):
         if self.read_only:
             return False
-
         try:
             with get_connection() as conn:
-                items = conn.execute("""
-                    SELECT ID, Name
-                    FROM Items
-                    ORDER BY Name COLLATE NOCASE
-                """).fetchall()
-
-        except sqlite3.Error as exc:
-            QMessageBox.critical(
-                self,
-                "Database Error",
-                f"Could not load items:\n{exc}",
-            )
+                items = conn.execute('SELECT ID, Name FROM Items ORDER BY Name COLLATE NOCASE').fetchall()
+        except sqlite3.Error:
             return False
 
         if not items:
-            QMessageBox.information(
-                self,
-                "No Items",
-                "Add at least one item in Inventory before creating a sale.",
-            )
             return False
 
         row_index = self.items_table.rowCount()
@@ -1153,63 +1053,24 @@ class SaleDialog(QDialog):
 
         item = QComboBox()
         item.addItem("Select item...", None)
-
         for item_id, item_name in items:
             item.addItem(item_name, item_id)
 
         rate = spinbox(decimals=0)
         gross = spinbox(decimals=2, suffix=" g")
         touch = spinbox(maximum=100, decimals=2, suffix="%")
-
         fine = QTableWidgetItem("0.00")
-        fine.setFlags(
-            fine.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        fine.setFlags(fine.flags() & ~Qt.ItemFlag.ItemIsEditable)
         making_rate = spinbox(decimals=0)
-
         making_amount = QTableWidgetItem("₹0.00")
-        making_amount.setFlags(
-            making_amount.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        making_amount.setFlags(making_amount.flags() & ~Qt.ItemFlag.ItemIsEditable)
         calculated_amount = QTableWidgetItem("₹0.00")
-        calculated_amount.setFlags(
-            calculated_amount.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        calculated_amount.setFlags(calculated_amount.flags() & ~Qt.ItemFlag.ItemIsEditable)
         actual_amount = spinbox(decimals=2)
         actual_amount.setProperty("actual_touched", False)
-
         discount = QTableWidgetItem("₹0.00")
-        discount.setFlags(
-            discount.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        discount.setFlags(discount.flags() & ~Qt.ItemFlag.ItemIsEditable)
         remove = QPushButton("Remove")
-        remove.setMinimumHeight(32)
-        remove.setMinimumWidth(78)
-
-        for widget in (
-            item,
-            rate,
-            gross,
-            touch,
-            making_rate,
-            actual_amount,
-        ):
-            widget.setMinimumHeight(34)
-            widget.setMinimumWidth(75)
-
-        for widget in (
-            fine,
-            making_amount,
-            calculated_amount,
-            discount,
-        ):
-            widget.setTextAlignment(
-                Qt.AlignmentFlag.AlignCenter
-            )
 
         self.items_table.setCellWidget(row_index, 0, item)
         self.items_table.setCellWidget(row_index, 1, rate)
@@ -1224,91 +1085,44 @@ class SaleDialog(QDialog):
         self.items_table.setCellWidget(row_index, 10, remove)
 
         record = {
-            "item": item,
-            "rate": rate,
-            "gross": gross,
-            "touch": touch,
-            "fine": fine,
-            "making_rate": making_rate,
-            "making_amount": making_amount,
-            "calculated_amount": calculated_amount,
-            "actual_amount": actual_amount,
-            "actual_touched": False,
-            "discount": discount,
-            "remove": remove,
+            "item": item, "rate": rate, "gross": gross, "touch": touch,
+            "fine": fine, "making_rate": making_rate, "making_amount": making_amount,
+            "calculated_amount": calculated_amount, "actual_amount": actual_amount,
+            "actual_touched": False, "discount": discount, "remove": remove,
         }
-
         self.item_rows.append(record)
 
-        for widget in (
-            rate,
-            gross,
-            touch,
-            making_rate,
-            actual_amount,
-        ):
-            widget.setValue(0)
+        for w in (rate, gross, touch, making_rate, actual_amount):
+            w.setValue(0)
 
-        self.update_rate_fields()
-
-        for widget in (
-            rate,
-            gross,
-            touch,
-            making_rate,
-        ):
-            widget.valueChanged.connect(
-                self.recalculate_totals
-            )
-
-        actual_amount.valueChanged.connect(
-            lambda _value, record=record:
-                self.mark_actual_amount_edited(record)
-        )
-
-        item.currentIndexChanged.connect(
-            self.recalculate_totals
-        )
-
-        remove.clicked.connect(
-            lambda checked=False, target=row_index:
-                self.remove_item_row(target)
-        )
+        rate.valueChanged.connect(self.recalculate_totals)
+        gross.valueChanged.connect(self.recalculate_totals)
+        touch.valueChanged.connect(self.recalculate_totals)
+        making_rate.valueChanged.connect(self.recalculate_totals)
+        actual_amount.valueChanged.connect(lambda _v, r=record: self.mark_actual_amount_edited(r))
+        item.currentIndexChanged.connect(self.recalculate_totals)
+        remove.clicked.connect(lambda checked=False, target=row_index: self.remove_item_row(target))
 
         self.recalculate_totals()
         return True
 
     def update_rate_fields(self, *_):
-        """Gold and Silver settlements do not use a rate in this sale form."""
         settlement = self.settlement_input.currentText()
         lock_rate = settlement in ("Gold", "Silver")
-
         for row in self.item_rows:
-            rate = row["rate"]
-
-            if lock_rate and rate.value() != 0:
-                rate.setValue(0)
-
-            rate.setEnabled(
-                not lock_rate and not self.read_only
-            )
+            if lock_rate:
+                row["rate"].setValue(0)
+            row["rate"].setEnabled(not lock_rate and not self.read_only)
 
     def remove_item_row(self, target):
         if len(self.item_rows) <= 1:
-            QMessageBox.information(
-                self,
-                "Sale Items",
-                "A sale must contain at least one item.",
-            )
             return
-
         self.items_table.removeRow(target)
         self.rebuild_rows()
         self.recalculate_totals()
 
     def rebuild_rows(self):
         self.item_rows = []
-
         for row_index in range(self.items_table.rowCount()):
             record = {
                 "item": self.items_table.cellWidget(row_index, 0),
@@ -1320,37 +1134,21 @@ class SaleDialog(QDialog):
                 "making_amount": self.items_table.item(row_index, 6),
                 "calculated_amount": self.items_table.item(row_index, 7),
                 "actual_amount": self.items_table.cellWidget(row_index, 8),
-                "actual_touched": bool(
-                    self.items_table.cellWidget(
-                        row_index, 8
-                    ).property("actual_touched")
-                ),
+                "actual_touched": bool(self.items_table.cellWidget(row_index, 8).property("actual_touched")),
                 "discount": self.items_table.item(row_index, 9),
                 "remove": self.items_table.cellWidget(row_index, 10),
             }
-
             self.item_rows.append(record)
-
             button = record["remove"]
-
             try:
                 button.clicked.disconnect()
             except RuntimeError:
                 pass
-
-            button.clicked.connect(
-                lambda checked=False, target=row_index:
-                    self.remove_item_row(target)
-            )
+            button.clicked.connect(lambda checked=False, target=row_index: self.remove_item_row(target))
 
     def mark_actual_amount_edited(self, record):
         record["actual_touched"] = True
-
-        record["actual_amount"].setProperty(
-            "actual_touched",
-            True,
-        )
-
+        record["actual_amount"].setProperty("actual_touched", True)
         self.recalculate_totals()
 
     def calculate_line(self, row):
@@ -1362,44 +1160,28 @@ class SaleDialog(QDialog):
         fine = gross * touch / 100
         silver_value = fine * rate / 1000
         making = gross * making_rate / 1000
-
         calculated_amount = silver_value + making
 
         actual_widget = row["actual_amount"]
-
         if not row.get("actual_touched", False):
             actual_widget.blockSignals(True)
             actual_widget.setValue(calculated_amount)
             actual_widget.blockSignals(False)
 
         actual_amount = actual_widget.value()
-
-        discount = round(
-            calculated_amount - actual_amount,
-            2,
-        )
+        discount = round(calculated_amount - actual_amount, 2)
 
         return {
             "item_id": row["item"].currentData(),
             "item_name": row["item"].currentText(),
-            "gross": gross,
-            "touch": touch,
-            "fine": fine,
-            "rate": rate,
-            "making_rate": making_rate,
-            "making": making,
-            "silver_value": silver_value,
-            "discount": discount,
-            "calculated_amount": calculated_amount,
-            "amount": actual_amount,
+            "gross": gross, "touch": touch, "fine": fine,
+            "rate": rate, "making_rate": making_rate, "making": making,
+            "silver_value": silver_value, "discount": discount,
+            "calculated_amount": calculated_amount, "amount": actual_amount,
         }
 
     def recalculate_totals(self, *_):
-        lines = [
-            self.calculate_line(row)
-            for row in self.item_rows
-        ]
-
+        lines = [self.calculate_line(row) for row in self.item_rows]
         gross = sum(line["gross"] for line in lines)
         fine = sum(line["fine"] for line in lines)
         silver_value = sum(line["silver_value"] for line in lines)
@@ -1408,122 +1190,42 @@ class SaleDialog(QDialog):
         full_amount = sum(line["amount"] for line in lines)
 
         for row, line in zip(self.item_rows, lines):
-            row["fine"].setText(
-                f'{line["fine"]:,.2f}'
-            )
+            row["fine"].setText(f'{line["fine"]:,.2f}')
+            row["making_amount"].setText(money(line["making"]))
+            row["calculated_amount"].setText(money(line["calculated_amount"]))
+            row["discount"].setText(money(line["discount"]))
 
-            row["making_amount"].setText(
-                money(line["making"])
-            )
-
-            row["calculated_amount"].setText(
-                money(line["calculated_amount"])
-            )
-
-            row["discount"].setText(
-                money(line["discount"])
-            )
-
-        self.gross_label.setText(
-            f"{gross:,.2f} g"
-        )
-
-        self.fine_label.setText(
-            f"{fine:,.2f} g"
-        )
-
-        self.silver_label.setText(
-            money(silver_value)
-        )
-
-        self.making_label.setText(
-            money(making)
-        )
-
-        self.discount_label.setText(
-            money(discount)
-        )
-
-        if self.settlement_input.currentText() in ("Silver", "Gold"):
-            money_due = max(
-                0,
-                full_amount - silver_value,
-            )
-
-            self.amount_label.setText(
-                money(money_due)
-            )
-
-            self.metal_label.setText(
-                f'{fine:,.2f} g '
-                f'{self.settlement_input.currentText().lower()}'
-            )
-
-        else:
-            self.amount_label.setText(
-                money(full_amount)
-            )
-
-            self.metal_label.setText("0.00 g")
+        self.gross_label.setText(f"{gross:,.2f} g")
+        self.fine_label.setText(f"{fine:,.2f} g")
+        self.silver_label.setText(money(silver_value))
+        self.making_label.setText(money(making))
+        self.discount_label.setText(money(discount))
+        self.amount_label.setText(money(full_amount))
 
     def load_transaction(self, transaction_id):
         with get_connection() as conn:
             conn.row_factory = sqlite3.Row
+            transaction = conn.execute("SELECT * FROM Transactions WHERE ID = ?", (transaction_id,)).fetchone()
+            saved_items = conn.execute("SELECT * FROM Transaction_items WHERE Transaction_ID = ? ORDER BY ID", (transaction_id,)).fetchall()
 
-            transaction = conn.execute(
-                "SELECT * FROM Transactions WHERE ID = ?",
-                (transaction_id,),
-            ).fetchone()
+        if transaction:
+            self.date_input.setDate(QDate.fromString(str(transaction["Date"] or ""), "yyyy-MM-dd"))
+            if transaction["Customer ID"] is not None:
+                self.party_type.setCurrentText("Customer")
+                self.refresh_parties()
+                party_id = transaction["Customer ID"]
+            else:
+                self.party_type.setCurrentText("Vendor")
+                self.refresh_parties()
+                party_id = transaction["Vendor ID"]
 
-            if transaction is None:
-                QMessageBox.warning(
-                    self,
-                    "Not Found",
-                    "This sale no longer exists.",
-                )
-                self.reject()
-                return
+            party_index = self.party_input.findData(party_id)
+            if party_index >= 0:
+                self.party_input.setCurrentIndex(party_index)
 
-            saved_items = conn.execute("""
-                SELECT *
-                FROM Transaction_items
-                WHERE Transaction_ID = ?
-                ORDER BY ID
-            """, (
-                transaction_id,
-            )).fetchall()
-
-        parsed_date = QDate.fromString(
-            str(transaction["Date"] or ""),
-            "yyyy-MM-dd",
-        )
-
-        if parsed_date.isValid():
-            self.date_input.setDate(parsed_date)
-
-        if transaction["Customer ID"] is not None:
-            self.party_type.setCurrentText("Customer")
-            self.refresh_parties()
-            party_id = transaction["Customer ID"]
-
-        else:
-            self.party_type.setCurrentText("Vendor")
-            self.refresh_parties()
-            party_id = transaction["Vendor ID"]
-
-        party_index = self.party_input.findData(party_id)
-
-        if party_index >= 0:
-            self.party_input.setCurrentIndex(party_index)
-
-        settlement_index = self.settlement_input.findText(
-            transaction["Settlement"] or "Cash"
-        )
-
-        if settlement_index >= 0:
-            self.settlement_input.setCurrentIndex(
-                settlement_index
-            )
+            settlement_index = self.settlement_input.findText(transaction["Settlement"] or "Cash")
+            if settlement_index >= 0:
+                self.settlement_input.setCurrentIndex(settlement_index)
 
         self.items_table.setRowCount(0)
         self.item_rows.clear()
@@ -1531,405 +1233,100 @@ class SaleDialog(QDialog):
         for saved in saved_items:
             if not self.add_item_row():
                 break
-
             row = self.item_rows[-1]
-
-            item_index = row["item"].findData(
-                saved["Item_ID"]
-            )
-
-            if item_index < 0:
-                item_index = row["item"].findText(
-                    saved["Item_name"] or ""
-                )
-
+            item_index = row["item"].findData(saved["Item_ID"])
             if item_index >= 0:
                 row["item"].setCurrentIndex(item_index)
-
-            row["rate"].setValue(
-                number(saved["Rate"])
-            )
-
-            row["gross"].setValue(
-                number(saved["Gross_weight"])
-            )
-
-            row["touch"].setValue(
-                number(saved["Tounch"])
-            )
-
-            row["making_rate"].setValue(
-                number(saved["Making"])
-            )
-
-            row["actual_amount"].setValue(
-                number(saved["Amount"])
-            )
-
+            row["rate"].setValue(number(saved["Rate"]))
+            row["gross"].setValue(number(saved["Gross_weight"]))
+            row["touch"].setValue(number(saved["Tounch"]))
+            row["making_rate"].setValue(number(saved["Making"]))
+            row["actual_amount"].setValue(number(saved["Amount"]))
             row["actual_touched"] = True
-
-            row["actual_amount"].setProperty(
-                "actual_touched",
-                True,
-            )
+            row["actual_amount"].setProperty("actual_touched", True)
 
         self.update_rate_fields()
-
-        if not saved_items:
-            self.add_item_row()
-
         self.recalculate_totals()
 
-    def set_read_only(self, read_only):
-        """Enable or disable editable fields when showing a sale."""
-        self.read_only = read_only
-
-        for widget in (
-            self.date_input,
-            self.party_type,
-            self.party_input,
-            self.settlement_input,
-            self.add_button,
-        ):
-            widget.setEnabled(not read_only)
-
-        for row in self.item_rows:
-            for key in (
-                "item",
-                "rate",
-                "gross",
-                "touch",
-                "making_rate",
-                "actual_amount",
-                "remove",
-            ):
-                row[key].setEnabled(not read_only)
-
-        self.update_rate_fields()
-
-        self.save_button.setVisible(
-            not read_only
-        )
-
-        self.cancel_button.setText(
-            "Close" if read_only else "Cancel"
-        )
-
     def save_sale(self):
-        if self.read_only:
-            self.accept()
-            return
-
         if self.party_input.currentData() is None:
-            QMessageBox.warning(
-                self,
-                "Select Party",
-                "Please select a customer or vendor.",
-            )
+            QMessageBox.warning(self, "Select Party", "Please select a customer or vendor.")
             return
 
         lines = []
-
         try:
             for row in self.item_rows:
                 line = self.calculate_line(row)
-
                 if line["item_id"] is None:
-                    raise ValueError(
-                        "Select an item in every row."
-                    )
-
+                    raise ValueError("Select an item in every row.")
                 if line["gross"] <= 0:
-                    raise ValueError(
-                        "Gross weight must be greater than zero."
-                    )
-
-                if (
-                    self.settlement_input.currentText()
-                    not in ("Gold", "Silver")
-                    and line["rate"] <= 0
-                ):
-                    raise ValueError(
-                        "Rate must be greater than zero."
-                    )
-
-                if not 0 < line["touch"] <= 100:
-                    raise ValueError(
-                        "Touch must be above 0% and at most 100%."
-                    )
-
-                if line["amount"] < 0:
-                    raise ValueError(
-                        "Actual sale amount cannot be negative."
-                    )
-
+                    raise ValueError("Gross weight must be greater than zero.")
                 lines.append(line)
-
-            if not lines:
-                raise ValueError(
-                    "Add at least one item."
-                )
-
         except ValueError as exc:
-            QMessageBox.warning(
-                self,
-                "Check Sale",
-                str(exc),
-            )
+            QMessageBox.warning(self, "Check Sale", str(exc))
             return
 
         settlement = self.settlement_input.currentText()
+        customer_id = self.party_input.currentData() if self.party_type.currentText() == "Customer" else None
+        vendor_id = self.party_input.currentData() if self.party_type.currentText() == "Vendor" else None
 
-        customer_id = (
-            self.party_input.currentData()
-            if self.party_type.currentText() == "Customer"
-            else None
-        )
-
-        vendor_id = (
-            self.party_input.currentData()
-            if self.party_type.currentText() == "Vendor"
-            else None
-        )
-
-        gross_total = sum(
-            line["gross"] for line in lines
-        )
-
-        fine_total = sum(
-            line["fine"] for line in lines
-        )
-
-        making_total = sum(
-            line["making"] for line in lines
-        )
-
-        discount_total = sum(
-            line["discount"] for line in lines
-        )
-
-        full_amount = sum(
-            line["amount"] for line in lines
-        )
-
-        if settlement in ("Silver", "Gold"):
-            amount_to_store = max(
-                0,
-                making_total - discount_total,
-            )
-
-            metal_weight = fine_total
-            direction = settlement
-
-        else:
-            amount_to_store = full_amount
-            metal_weight = 0
-            direction = None
+        gross_total = sum(l["gross"] for l in lines)
+        fine_total = sum(l["fine"] for l in lines)
+        making_total = sum(l["making"] for l in lines)
+        full_amount = sum(l["amount"] for l in lines)
 
         try:
             with get_connection() as conn:
                 cursor = conn.cursor()
-
-                required = {
-                    "Date",
-                    "Transaction Type",
-                    "Customer ID",
-                    "Vendor ID",
-                    "Settlement",
-                    "Total Weight",
-                    "Total Amount",
-                    "Total Weight Exchange",
-                    "Direction",
-                    "Exchange Fee",
-                }
-
-                missing = required - get_table_columns(
-                    cursor,
-                    "Transactions",
-                )
-
-                if missing:
-                    raise RuntimeError(
-                        "Transactions table is missing columns: "
-                        + ", ".join(sorted(missing))
-                    )
-
                 if self.transaction_id is None:
                     cursor.execute("""
                         INSERT INTO Transactions (
-                            Date,
-                            "Transaction Type",
-                            "Customer ID",
-                            "Vendor ID",
-                            Settlement,
-                            "Total Weight",
-                            "Total Amount",
-                            "Total Weight Exchange",
-                            Direction,
-                            "Exchange Fee"
-                        )
-                        VALUES (
-                            ?, 'Sale', ?, ?, ?, ?, ?, ?, ?, ?
-                        )
+                            Date, "Transaction Type", "Customer ID", "Vendor ID",
+                            Settlement, "Total Weight", "Total Amount", "Total Weight Exchange", Direction, "Exchange Fee"
+                        ) VALUES (?, 'Sale', ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         self.date_input.date().toString("yyyy-MM-dd"),
-                        customer_id,
-                        vendor_id,
-                        settlement,
-                        gross_total,
-                        amount_to_store,
-                        metal_weight,
-                        direction,
-                        making_total,
+                        customer_id, vendor_id, settlement, gross_total, full_amount, fine_total, None, making_total
                     ))
-
                     transaction_id = cursor.lastrowid
-
                 else:
                     transaction_id = self.transaction_id
-
+                    cursor.execute('DELETE FROM Ledger WHERE "Transaction ID" = ?', (transaction_id,))
+                    cursor.execute('DELETE FROM Inventory WHERE "Transaction ID" = ? AND "Item Movement" = \'Sale\'', (transaction_id,))
                     cursor.execute("""
-                        SELECT ID
-                        FROM Transactions
-                        WHERE ID = ?
-                          AND "Transaction Type" = 'Sale'
-                    """, (
-                        transaction_id,
-                    ))
-
-                    if cursor.fetchone() is None:
-                        raise RuntimeError(
-                            "The sale could not be found."
-                        )
-
-                    # Editing a sale rebuilds its ledger entries.
-                    if get_table_columns(cursor, "Ledger"):
-                        cursor.execute(
-                            'DELETE FROM Ledger WHERE "Transaction ID" = ?',
-                            (transaction_id,),
-                        )
-
-                    # Remove this sale's previous outgoing stock movements.
-                    cursor.execute("""
-                        DELETE FROM Inventory
-                        WHERE "Transaction ID" = ?
-                          AND "Item Movement" = 'Sale'
-                    """, (
-                        transaction_id,
-                    ))
-
-                    cursor.execute("""
-                        UPDATE Transactions
-                        SET Date = ?,
-                            "Customer ID" = ?,
-                            "Vendor ID" = ?,
-                            Settlement = ?,
-                            "Total Weight" = ?,
-                            "Total Amount" = ?,
-                            "Total Weight Exchange" = ?,
-                            Direction = ?,
-                            "Exchange Fee" = ?
+                        UPDATE Transactions SET Date = ?, "Customer ID" = ?, "Vendor ID" = ?, Settlement = ?,
+                        "Total Weight" = ?, "Total Amount" = ?, "Total Weight Exchange" = ?, "Exchange Fee" = ?
                         WHERE ID = ?
                     """, (
                         self.date_input.date().toString("yyyy-MM-dd"),
-                        customer_id,
-                        vendor_id,
-                        settlement,
-                        gross_total,
-                        amount_to_store,
-                        metal_weight,
-                        direction,
-                        making_total,
-                        transaction_id,
+                        customer_id, vendor_id, settlement, gross_total, full_amount, fine_total, making_total, transaction_id
                     ))
-
-                    cursor.execute(
-                        "DELETE FROM Transaction_items "
-                        "WHERE Transaction_ID = ?",
-                        (transaction_id,),
-                    )
+                    cursor.execute("DELETE FROM Transaction_items WHERE Transaction_ID = ?", (transaction_id,))
 
                 for line in lines:
                     cursor.execute("""
                         INSERT INTO Transaction_items (
-                            Transaction_ID,
-                            Item_name,
-                            Rate,
-                            Gross_weight,
-                            Tounch,
-                            Making,
-                            Net_weight,
-                            Calculated_amount,
-                            Amount,
-                            Discount,
-                            Type,
-                            Section,
-                            Item_ID
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            Transaction_ID, Item_name, Rate, Gross_weight, Tounch,
+                            Making, Net_weight, Calculated_amount, Amount, Discount, Type, Section, Item_ID
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Sale', ?, ?)
                     """, (
-                        transaction_id,
-                        line["item_name"],
-                        line["rate"],
-                        line["gross"],
-                        line["touch"],
-                        line["making_rate"],
-                        line["fine"],
-                        line["calculated_amount"],
-                        line["amount"],
-                        line["discount"],
-                        "Sale",
-                        settlement,
-                        line["item_id"],
+                        transaction_id, line["item_name"], line["rate"], line["gross"],
+                        line["touch"], line["making_rate"], line["fine"], line["calculated_amount"],
+                        line["amount"], line["discount"], settlement, line["item_id"]
                     ))
-
-                    # Inventory stores physical gross weight in grams.
                     cursor.execute("""
-                        INSERT INTO Inventory (
-                            "Item ID",
-                            "Transaction ID",
-                            "Item Movement",
-                            Weight
-                        )
+                        INSERT INTO Inventory ("Item ID", "Transaction ID", "Item Movement", Weight)
                         VALUES (?, ?, 'Sale', ?)
-                    """, (
-                        line["item_id"],
-                        transaction_id,
-                        -abs(line["gross"]),
-                    ))
+                    """, (line["item_id"], transaction_id, -abs(line["gross"])))
 
-                # Ledger entries are saved in the same transaction.
-                # Any error rolls back the sale, items, stock and ledger.
-                insert_sale_ledger_entries(
-                    cursor=cursor,
-                    transaction_id=transaction_id,
-                    customer_id=customer_id,
-                    vendor_id=vendor_id,
-                    settlement=settlement,
-                    full_amount=full_amount,
-                    fine_total=fine_total,
-                    amount_to_store=amount_to_store,
-                )
-
+                insert_sale_ledger_entries(cursor, transaction_id, customer_id, vendor_id, settlement, full_amount, fine_total, full_amount)
                 conn.commit()
 
             self.saved = True
-
-            QMessageBox.information(
-                self,
-                "Sale Saved",
-                f"Sale #{transaction_id} saved successfully.",
-            )
-
+            QMessageBox.information(self, "Sale Saved", f"Sale #{transaction_id} saved successfully.")
             self.accept()
-
         except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Could Not Save Sale",
-                "The sale was not saved. Database changes were rolled back.\n\n"
-                f"Details: {exc}",
-            )
+            QMessageBox.critical(self, "Could Not Save Sale", f"Error: {exc}")
 
 
 # ============================================================
@@ -1937,48 +1334,31 @@ class SaleDialog(QDialog):
 # ============================================================
 
 class PurchaseDialog(QDialog):
-
     def __init__(self, parent=None, transaction_id=None):
         super().__init__(parent)
-
         self.transaction_id = transaction_id
         self.read_only = False
         self.item_rows = []
         self.saved = False
 
-        self.setWindowTitle(
-            "Edit Purchase" if transaction_id else "New Purchase"
-        )
-
+        self.setWindowTitle("Edit Purchase" if transaction_id else "New Purchase")
         self.resize(1250, 760)
         self.setMinimumSize(950, 600)
-
         self.build_form()
 
         if transaction_id is not None:
             self.load_transaction(transaction_id)
-
         else:
             self.add_item_row()
-
         self.recalculate_totals()
 
     def build_form(self):
         layout = QVBoxLayout(self)
-
-        layout.addWidget(
-            QLabel("<h2>Purchase Transaction</h2>")
-        )
-
-        layout.addWidget(
-            QLabel(
-                "Weights are in grams. Rate and making are in rupees per kg."
-            )
-        )
+        layout.addWidget(QLabel("<h2>Purchase Transaction</h2>"))
+        layout.addWidget(QLabel("Weights are in grams. Rate and making are in rupees per kg."))
 
         details = QFrame()
         details.setFrameShape(QFrame.Shape.StyledPanel)
-
         form = QFormLayout(details)
 
         self.date_input = QDateEdit()
@@ -1987,106 +1367,80 @@ class PurchaseDialog(QDialog):
         self.date_input.setDate(QDate.currentDate())
 
         self.party_type = QComboBox()
-        self.party_type.addItems([
-            "Customer",
-            "Vendor",
-        ])
-
-        self.party_type.currentIndexChanged.connect(
-            self.refresh_parties
-        )
-
+        self.party_type.addItems(["Customer", "Vendor"])
+        self.party_type.currentIndexChanged.connect(self.refresh_parties)
         self.party_input = QComboBox()
 
         self.settlement_input = QComboBox()
-        self.settlement_input.addItems([
-            "Cash",
-            "Credit",
-            "Silver",
-            "Gold",
-        ])
-
-        self.settlement_input.currentIndexChanged.connect(
-            self.recalculate_totals
-        )
-
-        self.settlement_input.currentTextChanged.connect(
-            self.update_rate_fields
-        )
+        self.settlement_input.addItems(["Cash", "Credit", "Silver", "Gold"])
+        self.settlement_input.currentIndexChanged.connect(self.recalculate_totals)
+        self.settlement_input.currentTextChanged.connect(self.update_rate_fields)
 
         form.addRow("Date", self.date_input)
         form.addRow("Party Type", self.party_type)
         form.addRow("Party", self.party_input)
         form.addRow("Settlement", self.settlement_input)
-
         layout.addWidget(details)
-
         self.refresh_parties()
 
         heading_row = QHBoxLayout()
-        heading_row.addWidget(
-            QLabel("<h3>Items</h3>")
-        )
+        heading_row.addWidget(QLabel("<h3>Items</h3>"))
         heading_row.addStretch()
-
         self.add_button = QPushButton("+ Add Item")
-        self.add_button.clicked.connect(
-            self.add_item_row
-        )
-
+        self.add_button.clicked.connect(self.add_item_row)
         heading_row.addWidget(self.add_button)
         layout.addLayout(heading_row)
 
         self.items_table = QTableWidget(0, 11)
-
         self.items_table.setHorizontalHeaderLabels([
-            "Item",
-            "Rate ₹/kg",
-            "Gross g",
-            "Touch %",
-            "Fine g",
-            "Making ₹/kg",
-            "Making ₹",
-            "Calculated ₹",
-            "Actual Purchase ₹",
-            "Discount ₹",
-            "Action",
+            "Item", "Rate ₹/kg", "Gross g", "Touch %", "Fine g",
+            "Making ₹/kg", "Making ₹", "Calculated ₹", "Actual Purchase ₹", "Discount ₹", "Action",
         ])
-
+        purchase_header = self.items_table.horizontalHeader()
+        purchase_header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.setAlternatingRowColors(True)
         self.items_table.setWordWrap(False)
-
-        self.items_table.setHorizontalScrollMode(
-            QAbstractItemView.ScrollMode.ScrollPerPixel
-        )
-
-        self.items_table.setVerticalScrollMode(
-            QAbstractItemView.ScrollMode.ScrollPerPixel
-        )
-
-        self.items_table.verticalHeader().setDefaultSectionSize(48)
-
-        header = self.items_table.horizontalHeader()
-        header.setMinimumSectionSize(75)
-        header.setSectionResizeMode(
-            QHeaderView.ResizeMode.Interactive
-        )
-
-        for column, width in enumerate((
-            145, 95, 90, 85, 80, 110, 100, 120, 120, 105, 95
-        )):
-            self.items_table.setColumnWidth(
-                column,
-                width,
-            )
-
-        header.setStretchLastSection(True)
+        self.items_table.setStyleSheet("""
+        QTableWidget::item {
+            padding: 0px 0px;
+            margin: 2px;
+        }
+        QComboBox, QDoubleSpinBox {
+            background-color: #FFFFFF;
+            color: #302B2A;
+            border: 0px solid #DCD6D2;
+            border-radius: 0px;
+            padding: 0px 0px;
+            min-height: 20px;
+        }
+        QComboBox::drop-down {
+            width: 0px;
+            border: none;
+        }
+        QComboBox::down-arrow {
+            image: none;
+        }
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+            width: 0px;
+            border: none;
+        }
+        QPushButton {
+            border: none;
+            background-color: #FEE4E2;
+            color: #B42318;
+            border-radius: 0px;
+            padding: 0px 0px;
+            min-height: 20px;
+        }
+        QPushButton:hover {
+            background-color: #FECDCA;
+        }
+        """)
         layout.addWidget(self.items_table, 1)
 
         totals = QFrame()
         totals.setFrameShape(QFrame.Shape.StyledPanel)
-
         grid = QGridLayout(totals)
 
         self.gross_label = QLabel("0.00 g")
@@ -2108,123 +1462,46 @@ class PurchaseDialog(QDialog):
         ]
 
         for row, column, label, value in total_fields:
-            grid.addWidget(
-                QLabel(f"<b>{label}</b>"),
-                row,
-                column,
-            )
-
-            grid.addWidget(
-                value,
-                row,
-                column + 1,
-            )
+            grid.addWidget(QLabel(f"<b>{label}</b>"), row, column)
+            grid.addWidget(value, row, column + 1)
 
         layout.addWidget(totals)
 
-        note = QLabel(
-            "Fine weight = gross × touch ÷ 100. "
-            "Silver value = fine weight × rate ÷ 1,000. "
-            "Making charge = gross × making rate ÷ 1,000."
-        )
-
-        note.setWordWrap(True)
-        layout.addWidget(note)
-
         buttons = QHBoxLayout()
         buttons.addStretch()
-
         self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(
-            self.reject
-        )
-
+        self.cancel_button.clicked.connect(self.reject)
         self.save_button = QPushButton("Save Purchase")
-        self.save_button.clicked.connect(
-            self.save_purchase
-        )
-
+        self.save_button.clicked.connect(self.save_purchase)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.save_button)
-
         layout.addLayout(buttons)
 
     def refresh_parties(self, *_):
         self.party_input.clear()
-
         try:
             with get_connection() as conn:
                 if self.party_type.currentText() == "Customer":
-                    rows = conn.execute("""
-                        SELECT
-                            "Customer ID",
-                            Name,
-                            "Shop Name"
-                        FROM Customers
-                        ORDER BY "Shop Name", Name
-                    """).fetchall()
-
+                    rows = conn.execute('SELECT "Customer ID", Name, "Shop Name" FROM Customers ORDER BY "Shop Name", Name').fetchall()
                 else:
-                    rows = conn.execute("""
-                        SELECT
-                            ID,
-                            Name,
-                            "Firm Name"
-                        FROM Vendors
-                        ORDER BY "Firm Name", Name
-                    """).fetchall()
+                    rows = conn.execute('SELECT ID, Name, "Firm Name" FROM Vendors ORDER BY "Firm Name", Name').fetchall()
 
             for party_id, name, firm in rows:
-                display = (
-                    (firm or "").strip()
-                    or (name or "").strip()
-                )
-
-                if (
-                    name
-                    and firm
-                    and name.casefold() != firm.casefold()
-                ):
+                display = (firm or "").strip() or (name or "").strip()
+                if name and firm and name.casefold() != firm.casefold():
                     display = f"{display} — {name}"
-
-                self.party_input.addItem(
-                    display or "Unnamed",
-                    party_id,
-                )
-
-        except sqlite3.Error as exc:
-            QMessageBox.critical(
-                self,
-                "Database Error",
-                f"Could not load parties:\n{exc}",
-            )
+                self.party_input.addItem(display or "Unnamed", party_id)
+        except sqlite3.Error:
+            pass
 
     def add_item_row(self, *_):
-        if self.read_only:
-            return False
-
         try:
             with get_connection() as conn:
-                items = conn.execute("""
-                    SELECT ID, Name
-                    FROM Items
-                    ORDER BY Name COLLATE NOCASE
-                """).fetchall()
-
-        except sqlite3.Error as exc:
-            QMessageBox.critical(
-                self,
-                "Database Error",
-                f"Could not load items:\n{exc}",
-            )
+                items = conn.execute('SELECT ID, Name FROM Items ORDER BY Name COLLATE NOCASE').fetchall()
+        except sqlite3.Error:
             return False
 
         if not items:
-            QMessageBox.information(
-                self,
-                "No Items",
-                "Add at least one item in Inventory before creating a purchase.",
-            )
             return False
 
         row_index = self.items_table.rowCount()
@@ -2232,63 +1509,24 @@ class PurchaseDialog(QDialog):
 
         item = QComboBox()
         item.addItem("Select item...", None)
-
         for item_id, item_name in items:
             item.addItem(item_name, item_id)
 
         rate = spinbox(decimals=0)
         gross = spinbox(decimals=2, suffix=" g")
         touch = spinbox(maximum=100, decimals=2, suffix="%")
-
         fine = QTableWidgetItem("0.00")
-        fine.setFlags(
-            fine.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        fine.setFlags(fine.flags() & ~Qt.ItemFlag.ItemIsEditable)
         making_rate = spinbox(decimals=0)
-
         making_amount = QTableWidgetItem("₹0.00")
-        making_amount.setFlags(
-            making_amount.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        making_amount.setFlags(making_amount.flags() & ~Qt.ItemFlag.ItemIsEditable)
         calculated_amount = QTableWidgetItem("₹0.00")
-        calculated_amount.setFlags(
-            calculated_amount.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        calculated_amount.setFlags(calculated_amount.flags() & ~Qt.ItemFlag.ItemIsEditable)
         actual_amount = spinbox(decimals=2)
         actual_amount.setProperty("actual_touched", False)
-
         discount = QTableWidgetItem("₹0.00")
-        discount.setFlags(
-            discount.flags() & ~Qt.ItemFlag.ItemIsEditable
-        )
-
+        discount.setFlags(discount.flags() & ~Qt.ItemFlag.ItemIsEditable)
         remove = QPushButton("Remove")
-        remove.setMinimumHeight(32)
-        remove.setMinimumWidth(78)
-
-        for widget in (
-            item,
-            rate,
-            gross,
-            touch,
-            making_rate,
-            actual_amount,
-        ):
-            widget.setMinimumHeight(34)
-            widget.setMinimumWidth(75)
-
-        for widget in (
-            fine,
-            making_amount,
-            calculated_amount,
-            discount,
-        ):
-            widget.setTextAlignment(
-                Qt.AlignmentFlag.AlignCenter
-            )
 
         self.items_table.setCellWidget(row_index, 0, item)
         self.items_table.setCellWidget(row_index, 1, rate)
@@ -2303,91 +1541,44 @@ class PurchaseDialog(QDialog):
         self.items_table.setCellWidget(row_index, 10, remove)
 
         record = {
-            "item": item,
-            "rate": rate,
-            "gross": gross,
-            "touch": touch,
-            "fine": fine,
-            "making_rate": making_rate,
-            "making_amount": making_amount,
-            "calculated_amount": calculated_amount,
-            "actual_amount": actual_amount,
-            "actual_touched": False,
-            "discount": discount,
-            "remove": remove,
+            "item": item, "rate": rate, "gross": gross, "touch": touch,
+            "fine": fine, "making_rate": making_rate, "making_amount": making_amount,
+            "calculated_amount": calculated_amount, "actual_amount": actual_amount,
+            "actual_touched": False, "discount": discount, "remove": remove,
         }
-
         self.item_rows.append(record)
 
-        for widget in (
-            rate,
-            gross,
-            touch,
-            making_rate,
-            actual_amount,
-        ):
-            widget.setValue(0)
+        for w in (rate, gross, touch, making_rate, actual_amount):
+            w.setValue(0)
 
-        self.update_rate_fields()
-
-        for widget in (
-            rate,
-            gross,
-            touch,
-            making_rate,
-        ):
-            widget.valueChanged.connect(
-                self.recalculate_totals
-            )
-
-        actual_amount.valueChanged.connect(
-            lambda _value, record=record:
-                self.mark_actual_amount_edited(record)
-        )
-
-        item.currentIndexChanged.connect(
-            self.recalculate_totals
-        )
-
-        remove.clicked.connect(
-            lambda checked=False, target=row_index:
-                self.remove_item_row(target)
-        )
+        rate.valueChanged.connect(self.recalculate_totals)
+        gross.valueChanged.connect(self.recalculate_totals)
+        touch.valueChanged.connect(self.recalculate_totals)
+        making_rate.valueChanged.connect(self.recalculate_totals)
+        actual_amount.valueChanged.connect(lambda _v, r=record: self.mark_actual_amount_edited(r))
+        item.currentIndexChanged.connect(self.recalculate_totals)
+        remove.clicked.connect(lambda checked=False, target=row_index: self.remove_item_row(target))
 
         self.recalculate_totals()
         return True
 
     def update_rate_fields(self, *_):
-        """Gold and Silver settlements do not use a rate in this purchase form."""
         settlement = self.settlement_input.currentText()
         lock_rate = settlement in ("Gold", "Silver")
-
         for row in self.item_rows:
-            rate = row["rate"]
-
-            if lock_rate and rate.value() != 0:
-                rate.setValue(0)
-
-            rate.setEnabled(
-                not lock_rate and not self.read_only
-            )
+            if lock_rate:
+                row["rate"].setValue(0)
+            row["rate"].setEnabled(not lock_rate and not self.read_only)
 
     def remove_item_row(self, target):
         if len(self.item_rows) <= 1:
-            QMessageBox.information(
-                self,
-                "Purchase Items",
-                "A purchase must contain at least one item.",
-            )
             return
-
         self.items_table.removeRow(target)
         self.rebuild_rows()
         self.recalculate_totals()
 
     def rebuild_rows(self):
         self.item_rows = []
-
         for row_index in range(self.items_table.rowCount()):
             record = {
                 "item": self.items_table.cellWidget(row_index, 0),
@@ -2399,37 +1590,21 @@ class PurchaseDialog(QDialog):
                 "making_amount": self.items_table.item(row_index, 6),
                 "calculated_amount": self.items_table.item(row_index, 7),
                 "actual_amount": self.items_table.cellWidget(row_index, 8),
-                "actual_touched": bool(
-                    self.items_table.cellWidget(
-                        row_index, 8
-                    ).property("actual_touched")
-                ),
+                "actual_touched": bool(self.items_table.cellWidget(row_index, 8).property("actual_touched")),
                 "discount": self.items_table.item(row_index, 9),
                 "remove": self.items_table.cellWidget(row_index, 10),
             }
-
             self.item_rows.append(record)
-
             button = record["remove"]
-
             try:
                 button.clicked.disconnect()
             except RuntimeError:
                 pass
-
-            button.clicked.connect(
-                lambda checked=False, target=row_index:
-                    self.remove_item_row(target)
-            )
+            button.clicked.connect(lambda checked=False, target=row_index: self.remove_item_row(target))
 
     def mark_actual_amount_edited(self, record):
         record["actual_touched"] = True
-
-        record["actual_amount"].setProperty(
-            "actual_touched",
-            True,
-        )
-
+        record["actual_amount"].setProperty("actual_touched", True)
         self.recalculate_totals()
 
     def calculate_line(self, row):
@@ -2441,44 +1616,28 @@ class PurchaseDialog(QDialog):
         fine = gross * touch / 100
         silver_value = fine * rate / 1000
         making = gross * making_rate / 1000
-
         calculated_amount = silver_value + making
 
         actual_widget = row["actual_amount"]
-
         if not row.get("actual_touched", False):
             actual_widget.blockSignals(True)
             actual_widget.setValue(calculated_amount)
             actual_widget.blockSignals(False)
 
         actual_amount = actual_widget.value()
-
-        discount = round(
-            calculated_amount - actual_amount,
-            2,
-        )
+        discount = round(calculated_amount - actual_amount, 2)
 
         return {
             "item_id": row["item"].currentData(),
             "item_name": row["item"].currentText(),
-            "gross": gross,
-            "touch": touch,
-            "fine": fine,
-            "rate": rate,
-            "making_rate": making_rate,
-            "making": making,
-            "silver_value": silver_value,
-            "discount": discount,
-            "calculated_amount": calculated_amount,
-            "amount": actual_amount,
+            "gross": gross, "touch": touch, "fine": fine,
+            "rate": rate, "making_rate": making_rate, "making": making,
+            "silver_value": silver_value, "discount": discount,
+            "calculated_amount": calculated_amount, "amount": actual_amount,
         }
 
     def recalculate_totals(self, *_):
-        lines = [
-            self.calculate_line(row)
-            for row in self.item_rows
-        ]
-
+        lines = [self.calculate_line(row) for row in self.item_rows]
         gross = sum(line["gross"] for line in lines)
         fine = sum(line["fine"] for line in lines)
         silver_value = sum(line["silver_value"] for line in lines)
@@ -2487,122 +1646,42 @@ class PurchaseDialog(QDialog):
         full_amount = sum(line["amount"] for line in lines)
 
         for row, line in zip(self.item_rows, lines):
-            row["fine"].setText(
-                f'{line["fine"]:,.2f}'
-            )
+            row["fine"].setText(f'{line["fine"]:,.2f}')
+            row["making_amount"].setText(money(line["making"]))
+            row["calculated_amount"].setText(money(line["calculated_amount"]))
+            row["discount"].setText(money(line["discount"]))
 
-            row["making_amount"].setText(
-                money(line["making"])
-            )
-
-            row["calculated_amount"].setText(
-                money(line["calculated_amount"])
-            )
-
-            row["discount"].setText(
-                money(line["discount"])
-            )
-
-        self.gross_label.setText(
-            f"{gross:,.2f} g"
-        )
-
-        self.fine_label.setText(
-            f"{fine:,.2f} g"
-        )
-
-        self.silver_label.setText(
-            money(silver_value)
-        )
-
-        self.making_label.setText(
-            money(making)
-        )
-
-        self.discount_label.setText(
-            money(discount)
-        )
-
-        if self.settlement_input.currentText() in ("Silver", "Gold"):
-            money_due = max(
-                0,
-                full_amount - silver_value,
-            )
-
-            self.amount_label.setText(
-                money(money_due)
-            )
-
-            self.metal_label.setText(
-                f'{fine:,.2f} g '
-                f'{self.settlement_input.currentText().lower()}'
-            )
-
-        else:
-            self.amount_label.setText(
-                money(full_amount)
-            )
-
-            self.metal_label.setText("0.00 g")
+        self.gross_label.setText(f"{gross:,.2f} g")
+        self.fine_label.setText(f"{fine:,.2f} g")
+        self.silver_label.setText(money(silver_value))
+        self.making_label.setText(money(making))
+        self.discount_label.setText(money(discount))
+        self.amount_label.setText(money(full_amount))
 
     def load_transaction(self, transaction_id):
         with get_connection() as conn:
             conn.row_factory = sqlite3.Row
+            transaction = conn.execute("SELECT * FROM Transactions WHERE ID = ?", (transaction_id,)).fetchone()
+            saved_items = conn.execute("SELECT * FROM Transaction_items WHERE Transaction_ID = ? ORDER BY ID", (transaction_id,)).fetchall()
 
-            transaction = conn.execute(
-                "SELECT * FROM Transactions WHERE ID = ?",
-                (transaction_id,),
-            ).fetchone()
+        if transaction:
+            self.date_input.setDate(QDate.fromString(str(transaction["Date"] or ""), "yyyy-MM-dd"))
+            if transaction["Customer ID"] is not None:
+                self.party_type.setCurrentText("Customer")
+                self.refresh_parties()
+                party_id = transaction["Customer ID"]
+            else:
+                self.party_type.setCurrentText("Vendor")
+                self.refresh_parties()
+                party_id = transaction["Vendor ID"]
 
-            if transaction is None:
-                QMessageBox.warning(
-                    self,
-                    "Not Found",
-                    "This purchase no longer exists.",
-                )
-                self.reject()
-                return
+            party_index = self.party_input.findData(party_id)
+            if party_index >= 0:
+                self.party_input.setCurrentIndex(party_index)
 
-            saved_items = conn.execute("""
-                SELECT *
-                FROM Transaction_items
-                WHERE Transaction_ID = ?
-                ORDER BY ID
-            """, (
-                transaction_id,
-            )).fetchall()
-
-        parsed_date = QDate.fromString(
-            str(transaction["Date"] or ""),
-            "yyyy-MM-dd",
-        )
-
-        if parsed_date.isValid():
-            self.date_input.setDate(parsed_date)
-
-        if transaction["Customer ID"] is not None:
-            self.party_type.setCurrentText("Customer")
-            self.refresh_parties()
-            party_id = transaction["Customer ID"]
-
-        else:
-            self.party_type.setCurrentText("Vendor")
-            self.refresh_parties()
-            party_id = transaction["Vendor ID"]
-
-        party_index = self.party_input.findData(party_id)
-
-        if party_index >= 0:
-            self.party_input.setCurrentIndex(party_index)
-
-        settlement_index = self.settlement_input.findText(
-            transaction["Settlement"] or "Cash"
-        )
-
-        if settlement_index >= 0:
-            self.settlement_input.setCurrentIndex(
-                settlement_index
-            )
+            settlement_index = self.settlement_input.findText(transaction["Settlement"] or "Cash")
+            if settlement_index >= 0:
+                self.settlement_input.setCurrentIndex(settlement_index)
 
         self.items_table.setRowCount(0)
         self.item_rows.clear()
@@ -2610,402 +1689,609 @@ class PurchaseDialog(QDialog):
         for saved in saved_items:
             if not self.add_item_row():
                 break
-
             row = self.item_rows[-1]
-
-            item_index = row["item"].findData(
-                saved["Item_ID"]
-            )
-
-            if item_index < 0:
-                item_index = row["item"].findText(
-                    saved["Item_name"] or ""
-                )
-
+            item_index = row["item"].findData(saved["Item_ID"])
             if item_index >= 0:
                 row["item"].setCurrentIndex(item_index)
-
-            row["rate"].setValue(
-                number(saved["Rate"])
-            )
-
-            row["gross"].setValue(
-                number(saved["Gross_weight"])
-            )
-
-            row["touch"].setValue(
-                number(saved["Tounch"])
-            )
-
-            row["making_rate"].setValue(
-                number(saved["Making"])
-            )
-
-            row["actual_amount"].setValue(
-                number(saved["Amount"])
-            )
-
+            row["rate"].setValue(number(saved["Rate"]))
+            row["gross"].setValue(number(saved["Gross_weight"]))
+            row["touch"].setValue(number(saved["Tounch"]))
+            row["making_rate"].setValue(number(saved["Making"]))
+            row["actual_amount"].setValue(number(saved["Amount"]))
             row["actual_touched"] = True
-
-            row["actual_amount"].setProperty(
-                "actual_touched",
-                True,
-            )
+            row["actual_amount"].setProperty("actual_touched", True)
 
         self.update_rate_fields()
-
-        if not saved_items:
-            self.add_item_row()
-
         self.recalculate_totals()
 
-    def set_read_only(self, read_only):
-        """Enable or disable editable fields when showing a purchase."""
-        self.read_only = read_only
-
-        for widget in (
-            self.date_input,
-            self.party_type,
-            self.party_input,
-            self.settlement_input,
-            self.add_button,
-        ):
-            widget.setEnabled(not read_only)
-
-        for row in self.item_rows:
-            for key in (
-                "item",
-                "rate",
-                "gross",
-                "touch",
-                "making_rate",
-                "actual_amount",
-                "remove",
-            ):
-                row[key].setEnabled(not read_only)
-
-        self.update_rate_fields()
-
-        self.save_button.setVisible(
-            not read_only
-        )
-
-        self.cancel_button.setText(
-            "Close" if read_only else "Cancel"
-        )
-
     def save_purchase(self):
-        if self.read_only:
-            self.accept()
-            return
-
         if self.party_input.currentData() is None:
-            QMessageBox.warning(
-                self,
-                "Select Party",
-                "Please select a customer or vendor.",
-            )
+            QMessageBox.warning(self, "Select Party", "Please select a customer or vendor.")
             return
 
         lines = []
-
         try:
             for row in self.item_rows:
                 line = self.calculate_line(row)
-
                 if line["item_id"] is None:
-                    raise ValueError(
-                        "Select an item in every row."
-                    )
-
+                    raise ValueError("Select an item in every row.")
                 if line["gross"] <= 0:
-                    raise ValueError(
-                        "Gross weight must be greater than zero."
-                    )
-
-                if (
-                    self.settlement_input.currentText()
-                    not in ("Gold", "Silver")
-                    and line["rate"] <= 0
-                ):
-                    raise ValueError(
-                        "Rate must be greater than zero."
-                    )
-
-                if not 0 < line["touch"] <= 100:
-                    raise ValueError(
-                        "Touch must be above 0% and at most 100%."
-                    )
-
-                if line["amount"] < 0:
-                    raise ValueError(
-                        "Actual purchase amount cannot be negative."
-                    )
-
+                    raise ValueError("Gross weight must be greater than zero.")
                 lines.append(line)
-
-            if not lines:
-                raise ValueError(
-                    "Add at least one item."
-                )
-
         except ValueError as exc:
-            QMessageBox.warning(
-                self,
-                "Check Purchase",
-                str(exc),
-            )
+            QMessageBox.warning(self, "Check Purchase", str(exc))
             return
 
         settlement = self.settlement_input.currentText()
+        customer_id = self.party_input.currentData() if self.party_type.currentText() == "Customer" else None
+        vendor_id = self.party_input.currentData() if self.party_type.currentText() == "Vendor" else None
 
-        customer_id = (
-            self.party_input.currentData()
-            if self.party_type.currentText() == "Customer"
-            else None
-        )
-
-        vendor_id = (
-            self.party_input.currentData()
-            if self.party_type.currentText() == "Vendor"
-            else None
-        )
-
-        gross_total = sum(
-            line["gross"] for line in lines
-        )
-
-        fine_total = sum(
-            line["fine"] for line in lines
-        )
-
-        making_total = sum(
-            line["making"] for line in lines
-        )
-
-        discount_total = sum(
-            line["discount"] for line in lines
-        )
-
-        full_amount = sum(
-            line["amount"] for line in lines
-        )
-
-        if settlement in ("Silver", "Gold"):
-            amount_to_store = max(
-                0,
-                making_total - discount_total,
-            )
-
-            metal_weight = fine_total
-            direction = settlement
-
-        else:
-            amount_to_store = full_amount
-            metal_weight = 0
-            direction = None
+        gross_total = sum(l["gross"] for l in lines)
+        fine_total = sum(l["fine"] for l in lines)
+        making_total = sum(l["making"] for l in lines)
+        full_amount = sum(l["amount"] for l in lines)
 
         try:
             with get_connection() as conn:
                 cursor = conn.cursor()
-
-                required = {
-                    "Date",
-                    "Transaction Type",
-                    "Customer ID",
-                    "Vendor ID",
-                    "Settlement",
-                    "Total Weight",
-                    "Total Amount",
-                    "Total Weight Exchange",
-                    "Direction",
-                    "Exchange Fee",
-                }
-
-                missing = required - get_table_columns(
-                    cursor,
-                    "Transactions",
-                )
-
-                if missing:
-                    raise RuntimeError(
-                        "Transactions table is missing columns: "
-                        + ", ".join(sorted(missing))
-                    )
-
                 if self.transaction_id is None:
                     cursor.execute("""
                         INSERT INTO Transactions (
-                            Date,
-                            "Transaction Type",
-                            "Customer ID",
-                            "Vendor ID",
-                            Settlement,
-                            "Total Weight",
-                            "Total Amount",
-                            "Total Weight Exchange",
-                            Direction,
-                            "Exchange Fee"
-                        )
-                        VALUES (
-                            ?, 'Purchase', ?, ?, ?, ?, ?, ?, ?, ?
-                        )
+                            Date, "Transaction Type", "Customer ID", "Vendor ID",
+                            Settlement, "Total Weight", "Total Amount", "Total Weight Exchange", Direction, "Exchange Fee"
+                        ) VALUES (?, 'Purchase', ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         self.date_input.date().toString("yyyy-MM-dd"),
-                        customer_id,
-                        vendor_id,
-                        settlement,
-                        gross_total,
-                        amount_to_store,
-                        metal_weight,
-                        direction,
-                        making_total,
+                        customer_id, vendor_id, settlement, gross_total, full_amount, fine_total, None, making_total
                     ))
-
                     transaction_id = cursor.lastrowid
-
                 else:
                     transaction_id = self.transaction_id
-
+                    cursor.execute('DELETE FROM Ledger WHERE "Transaction ID" = ?', (transaction_id,))
+                    cursor.execute('DELETE FROM Inventory WHERE "Transaction ID" = ? AND "Item Movement" = \'Purchase\'', (transaction_id,))
                     cursor.execute("""
-                        SELECT ID
-                        FROM Transactions
-                        WHERE ID = ?
-                          AND "Transaction Type" = 'Purchase'
-                    """, (
-                        transaction_id,
-                    ))
-
-                    if cursor.fetchone() is None:
-                        raise RuntimeError(
-                            "The purchase could not be found."
-                        )
-
-                    # Editing a purchase rebuilds its ledger entries.
-                    if get_table_columns(cursor, "Ledger"):
-                        cursor.execute(
-                            'DELETE FROM Ledger WHERE "Transaction ID" = ?',
-                            (transaction_id,),
-                        )
-
-                    # Remove this purchase's previous incoming stock movements.
-                    cursor.execute("""
-                        DELETE FROM Inventory
-                        WHERE "Transaction ID" = ?
-                          AND "Item Movement" = 'Purchase'
-                    """, (
-                        transaction_id,
-                    ))
-
-                    cursor.execute("""
-                        UPDATE Transactions
-                        SET Date = ?,
-                            "Customer ID" = ?,
-                            "Vendor ID" = ?,
-                            Settlement = ?,
-                            "Total Weight" = ?,
-                            "Total Amount" = ?,
-                            "Total Weight Exchange" = ?,
-                            Direction = ?,
-                            "Exchange Fee" = ?
+                        UPDATE Transactions SET Date = ?, "Customer ID" = ?, "Vendor ID" = ?, Settlement = ?,
+                        "Total Weight" = ?, "Total Amount" = ?, "Total Weight Exchange" = ?, "Exchange Fee" = ?
                         WHERE ID = ?
                     """, (
                         self.date_input.date().toString("yyyy-MM-dd"),
-                        customer_id,
-                        vendor_id,
-                        settlement,
-                        gross_total,
-                        amount_to_store,
-                        metal_weight,
-                        direction,
-                        making_total,
-                        transaction_id,
+                        customer_id, vendor_id, settlement, gross_total, full_amount, fine_total, making_total, transaction_id
                     ))
-
-                    cursor.execute(
-                        "DELETE FROM Transaction_items "
-                        "WHERE Transaction_ID = ?",
-                        (transaction_id,),
-                    )
+                    cursor.execute("DELETE FROM Transaction_items WHERE Transaction_ID = ?", (transaction_id,))
 
                 for line in lines:
                     cursor.execute("""
                         INSERT INTO Transaction_items (
-                            Transaction_ID,
-                            Item_name,
-                            Rate,
-                            Gross_weight,
-                            Tounch,
-                            Making,
-                            Net_weight,
-                            Calculated_amount,
-                            Amount,
-                            Discount,
-                            Type,
-                            Section,
-                            Item_ID
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            Transaction_ID, Item_name, Rate, Gross_weight, Tounch,
+                            Making, Net_weight, Calculated_amount, Amount, Discount, Type, Section, Item_ID
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Purchase', ?, ?)
                     """, (
-                        transaction_id,
-                        line["item_name"],
-                        line["rate"],
-                        line["gross"],
-                        line["touch"],
-                        line["making_rate"],
-                        line["fine"],
-                        line["calculated_amount"],
-                        line["amount"],
-                        line["discount"],
-                        "Purchase",
-                        settlement,
-                        line["item_id"],
+                        transaction_id, line["item_name"], line["rate"], line["gross"],
+                        line["touch"], line["making_rate"], line["fine"], line["calculated_amount"],
+                        line["amount"], line["discount"], settlement, line["item_id"]
                     ))
-
-                    # Purchases add physical gross weight to inventory, in grams.
                     cursor.execute("""
-                        INSERT INTO Inventory (
-                            "Item ID",
-                            "Transaction ID",
-                            "Item Movement",
-                            Weight
-                        )
+                        INSERT INTO Inventory ("Item ID", "Transaction ID", "Item Movement", Weight)
                         VALUES (?, ?, 'Purchase', ?)
-                    """, (
-                        line["item_id"],
-                        transaction_id,
-                        abs(line["gross"]),
-                    ))
+                    """, (line["item_id"], transaction_id, abs(line["gross"])))
 
-                # Ledger entries are saved in the same transaction.
-                # Any error rolls back the purchase, items, stock and ledger.
-                insert_purchase_ledger_entries(
+                insert_purchase_ledger_entries(cursor, transaction_id, customer_id, vendor_id, settlement, full_amount, fine_total, full_amount)
+                conn.commit()
+
+            self.saved = True
+            QMessageBox.information(self, "Purchase Saved", f"Purchase #{transaction_id} saved successfully.")
+            self.accept()
+        except Exception as exc:
+            QMessageBox.critical(self, "Could Not Save Purchase", f"Error: {exc}")
+
+
+# ============================================================
+# EXCHANGE ENTRY / EDIT DIALOG
+# ============================================================
+
+class ExchangeDialog(QDialog):
+
+    def __init__(self, parent=None, transaction_id=None):
+        super().__init__(parent)
+
+        self.transaction_id = transaction_id
+        self.read_only = False
+        self.new_item_rows = []
+        self.old_item_rows = []
+        self.saved = False
+
+        self.setWindowTitle("Edit Exchange" if transaction_id else "New Exchange")
+        self.resize(1300, 820)
+        self.setMinimumSize(1000, 680)
+
+        self.build_form()
+
+        if transaction_id is not None:
+            self.load_transaction(transaction_id)
+        else:
+            self.add_new_item_row()
+            self.add_old_item_row()
+
+        self.recalculate_totals()
+
+    def build_form(self):
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("<h2>Exchange Transaction</h2>"))
+        layout.addWidget(QLabel("Manage exchange between new items and old items with cash settlement."))
+
+        details = QFrame()
+        details.setFrameShape(QFrame.Shape.StyledPanel)
+        form = QFormLayout(details)
+
+        self.date_input = QDateEdit()
+        self.date_input.setCalendarPopup(True)
+        self.date_input.setDisplayFormat("dd MMM yyyy")
+        self.date_input.setDate(QDate.currentDate())
+
+        self.direction_input = QComboBox()
+        self.direction_input.addItems(["Debit", "Credit"])
+
+        self.party_type = QComboBox()
+        self.party_type.addItems(["Customer", "Vendor"])
+        self.party_type.currentIndexChanged.connect(self.refresh_parties)
+
+        self.party_input = QComboBox()
+
+        self.settlement_input = QComboBox()
+        self.settlement_input.addItems(["Cash", "Credit"])
+
+        self.cash_input = spinbox(decimals=2)
+        self.cash_input.valueChanged.connect(self.recalculate_totals)
+
+        form.addRow("Date", self.date_input)
+        form.addRow("Direction", self.direction_input)
+        form.addRow("Party Type", self.party_type)
+        form.addRow("Party", self.party_input)
+        form.addRow("Settlement", self.settlement_input)
+        form.addRow("Settlement Cash Amount", self.cash_input)
+
+        layout.addWidget(details)
+        self.refresh_parties()
+
+        table_styling = """
+            QTableWidget::item {
+                padding: 0px 0px;
+                margin: 2px;
+            }
+            QComboBox, QDoubleSpinBox {
+                background-color: #FFFFFF;
+                color: #302B2A;
+                border: 0px solid #DCD6D2;
+                border-radius: 0px;
+                padding: 0px 0px;
+                min-height: 20px;
+            }
+            QComboBox::drop-down {
+                width: 0px;
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+            }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                width: 0px;
+                border: none;
+            }
+            QPushButton {
+                border: none;
+                background-color: #FEE4E2;
+                color: #B42318;
+                border-radius: 0px;
+                padding: 0px 0px;
+                min-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #FECDCA;
+            }
+        """
+
+        # Section 1: New Items Window (Without Rate and Making)
+        new_heading = QHBoxLayout()
+        new_heading.addWidget(QLabel("<h3>New Items Section</h3>"))
+        new_heading.addStretch()
+        self.add_new_button = QPushButton("+ Add New Item")
+        self.add_new_button.clicked.connect(self.add_new_item_row)
+        new_heading.addWidget(self.add_new_button)
+        layout.addLayout(new_heading)
+
+        self.new_items_table = QTableWidget(0, 6)
+        self.new_items_table.setHorizontalHeaderLabels([
+            "Item", "Gross g", "Touch %", "Fine g", "Amount ₹", "Action",
+        ])
+        new_header = self.new_items_table.horizontalHeader()
+        new_header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.new_items_table.verticalHeader().setVisible(False)
+        self.new_items_table.setAlternatingRowColors(True)
+        self.new_items_table.setStyleSheet(table_styling)
+        layout.addWidget(self.new_items_table, 1)
+
+        # Section 2: Old Items Window (Without Rate and Making)
+        old_heading = QHBoxLayout()
+        old_heading.addWidget(QLabel("<h3>Old Items Section</h3>"))
+        old_heading.addStretch()
+        self.add_old_button = QPushButton("+ Add Old Item")
+        self.add_old_button.clicked.connect(self.add_old_item_row)
+        old_heading.addWidget(self.add_old_button)
+        layout.addLayout(old_heading)
+
+        self.old_items_table = QTableWidget(0, 6)
+        self.old_items_table.setHorizontalHeaderLabels([
+            "Item", "Gross g", "Touch %", "Fine g", "Amount ₹", "Action",
+        ])
+        old_header = self.old_items_table.horizontalHeader()
+        old_header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.old_items_table.verticalHeader().setVisible(False)
+        self.old_items_table.setAlternatingRowColors(True)
+        self.old_items_table.setStyleSheet(table_styling)
+        layout.addWidget(self.old_items_table, 1)
+
+        # Totals Summary
+        totals = QFrame()
+        totals.setFrameShape(QFrame.Shape.StyledPanel)
+        grid = QGridLayout(totals)
+
+        self.new_gross_label = QLabel("0.00 g")
+        self.new_fine_label = QLabel("0.00 g")
+        self.new_amount_label = QLabel("₹0.00")
+
+        self.old_gross_label = QLabel("0.00 g")
+        self.old_fine_label = QLabel("0.00 g")
+        self.old_amount_label = QLabel("₹0.00")
+
+        self.net_balance_label = QLabel("₹0.00")
+
+        grid.addWidget(QLabel("<b>New Gross:</b>"), 0, 0)
+        grid.addWidget(self.new_gross_label, 0, 1)
+        grid.addWidget(QLabel("<b>New Fine (Net):</b>"), 0, 2)
+        grid.addWidget(self.new_fine_label, 0, 3)
+        grid.addWidget(QLabel("<b>New Total:</b>"), 0, 4)
+        grid.addWidget(self.new_amount_label, 0, 5)
+
+        grid.addWidget(QLabel("<b>Old Gross:</b>"), 1, 0)
+        grid.addWidget(self.old_gross_label, 1, 1)
+        grid.addWidget(QLabel("<b>Old Fine (Net):</b>"), 1, 2)
+        grid.addWidget(self.old_fine_label, 1, 3)
+        grid.addWidget(QLabel("<b>Old Total:</b>"), 1, 4)
+        grid.addWidget(self.old_amount_label, 1, 5)
+
+        grid.addWidget(QLabel("<b>Exchange Fee / Balance Difference:</b>"), 2, 0, 1, 3)
+        grid.addWidget(self.net_balance_label, 2, 3, 1, 3)
+
+        layout.addWidget(totals)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        self.save_button = QPushButton("Save Exchange")
+        self.save_button.clicked.connect(self.save_exchange)
+        buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
+
+    def refresh_parties(self, *_):
+        self.party_input.clear()
+        try:
+            with get_connection() as conn:
+                if self.party_type.currentText() == "Customer":
+                    rows = conn.execute('SELECT "Customer ID", Name, "Shop Name" FROM Customers ORDER BY "Shop Name", Name').fetchall()
+                else:
+                    rows = conn.execute('SELECT ID, Name, "Firm Name" FROM Vendors ORDER BY "Firm Name", Name').fetchall()
+
+            for party_id, name, firm in rows:
+                display = (firm or "").strip() or (name or "").strip()
+                if name and firm and name.casefold() != firm.casefold():
+                    display = f"{display} — {name}"
+                self.party_input.addItem(display or "Unnamed", party_id)
+        except sqlite3.Error:
+            pass
+
+    def add_item_row_to_table(self, table, row_list):
+        try:
+            with get_connection() as conn:
+                items = conn.execute('SELECT ID, Name FROM Items ORDER BY Name COLLATE NOCASE').fetchall()
+        except sqlite3.Error:
+            return False
+
+        if not items:
+            return False
+
+        row_index = table.rowCount()
+        table.insertRow(row_index)
+
+        item = QComboBox()
+        item.addItem("Select item...", None)
+        for item_id, item_name in items:
+            item.addItem(item_name, item_id)
+
+        gross = spinbox(decimals=2, suffix=" g")
+        touch = spinbox(maximum=100, decimals=2, suffix="%")
+        fine = QTableWidgetItem("0.00")
+        fine.setFlags(fine.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        actual_amount = spinbox(decimals=2)
+        remove = QPushButton("Remove")
+
+        table.setCellWidget(row_index, 0, item)
+        table.setCellWidget(row_index, 1, gross)
+        table.setCellWidget(row_index, 2, touch)
+        table.setItem(row_index, 3, fine)
+        table.setCellWidget(row_index, 4, actual_amount)
+        table.setCellWidget(row_index, 5, remove)
+
+        record = {
+            "item": item, "gross": gross, "touch": touch,
+            "fine": fine, "actual_amount": actual_amount, "remove": remove,
+        }
+        row_list.append(record)
+
+        gross.valueChanged.connect(self.recalculate_totals)
+        touch.valueChanged.connect(self.recalculate_totals)
+        actual_amount.valueChanged.connect(self.recalculate_totals)
+        item.currentIndexChanged.connect(self.recalculate_totals)
+
+        if table == self.new_items_table:
+            remove.clicked.connect(lambda checked=False, t=row_index: self.remove_new_item_row(t))
+        else:
+            remove.clicked.connect(lambda checked=False, t=row_index: self.remove_old_item_row(t))
+
+        self.recalculate_totals()
+        return True
+
+    def add_new_item_row(self):
+        return self.add_item_row_to_table(self.new_items_table, self.new_item_rows)
+
+    def add_old_item_row(self):
+        return self.add_item_row_to_table(self.old_items_table, self.old_item_rows)
+
+    def remove_new_item_row(self, target):
+        if len(self.new_item_rows) <= 1:
+            return
+        self.new_items_table.removeRow(target)
+        self.new_item_rows.pop(target)
+        self.rebuild_table_connections(self.new_items_table, self.new_item_rows, True)
+        self.recalculate_totals()
+
+    def remove_old_item_row(self, target):
+        if len(self.old_item_rows) <= 1:
+            return
+        self.old_items_table.removeRow(target)
+        self.old_item_rows.pop(target)
+        self.rebuild_table_connections(self.old_items_table, self.old_item_rows, False)
+        self.recalculate_totals()
+
+    def rebuild_table_connections(self, table, row_list, is_new):
+        for row_index in range(table.rowCount()):
+            record = row_list[row_index]
+            button = record["remove"]
+            try:
+                button.clicked.disconnect()
+            except RuntimeError:
+                pass
+            if is_new:
+                button.clicked.connect(lambda checked=False, t=row_index: self.remove_new_item_row(t))
+            else:
+                button.clicked.connect(lambda checked=False, t=row_index: self.remove_old_item_row(t))
+
+    def calculate_line(self, row):
+        gross = row["gross"].value()
+        touch = row["touch"].value()
+        fine = gross * touch / 100
+        amount = row["actual_amount"].value()
+
+        return {
+            "item_id": row["item"].currentData(),
+            "item_name": row["item"].currentText(),
+            "gross": gross, "touch": touch, "fine": fine,
+            "amount": amount,
+        }
+
+    def recalculate_totals(self, *_):
+        new_lines = [self.calculate_line(r) for r in self.new_item_rows]
+        old_lines = [self.calculate_line(r) for r in self.old_item_rows]
+
+        for row, line in zip(self.new_item_rows, new_lines):
+            row["fine"].setText(f'{line["fine"]:,.2f}')
+
+        for row, line in zip(self.old_item_rows, old_lines):
+            row["fine"].setText(f'{line["fine"]:,.2f}')
+
+        new_gross = sum(l["gross"] for l in new_lines)
+        new_fine = sum(l["fine"] for l in new_lines)
+        new_amount = sum(l["amount"] for l in new_lines)
+
+        old_gross = sum(l["gross"] for l in old_lines)
+        old_fine = sum(l["fine"] for l in old_lines)
+        old_amount = sum(l["amount"] for l in old_lines)
+
+        self.new_gross_label.setText(f"{new_gross:,.2f} g")
+        self.new_fine_label.setText(f"{new_fine:,.2f} g")
+        self.new_amount_label.setText(money(new_amount))
+
+        self.old_gross_label.setText(f"{old_gross:,.2f} g")
+        self.old_fine_label.setText(f"{old_fine:,.2f} g")
+        self.old_amount_label.setText(money(old_amount))
+
+        cash_settled = self.cash_input.value()
+        diff = new_amount - old_amount - cash_settled
+        self.net_balance_label.setText(money(diff))
+
+    def load_transaction(self, transaction_id):
+        with get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            transaction = conn.execute("SELECT * FROM Transactions WHERE ID = ?", (transaction_id,)).fetchone()
+            saved_items = conn.execute("SELECT * FROM Transaction_items WHERE Transaction_ID = ? ORDER BY ID", (transaction_id,)).fetchall()
+
+        if transaction:
+            self.date_input.setDate(QDate.fromString(str(transaction["Date"] or ""), "yyyy-MM-dd"))
+            self.direction_input.setCurrentText(transaction["Direction"] or "Debit")
+            if transaction["Customer ID"] is not None:
+                self.party_type.setCurrentText("Customer")
+                self.refresh_parties()
+                party_id = transaction["Customer ID"]
+            else:
+                self.party_type.setCurrentText("Vendor")
+                self.refresh_parties()
+                party_id = transaction["Vendor ID"]
+
+            self.party_input.setCurrentIndex(self.party_input.findData(party_id))
+            self.settlement_input.setCurrentText(transaction["Settlement"] or "Cash")
+            self.cash_input.setValue(number(transaction["Total Amount"]))
+
+        self.new_items_table.setRowCount(0)
+        self.new_item_rows.clear()
+        self.old_items_table.setRowCount(0)
+        self.old_item_rows.clear()
+
+        for saved in saved_items:
+            is_new = (saved["Section"] == "New")
+            if is_new:
+                self.add_new_item_row()
+                row = self.new_item_rows[-1]
+            else:
+                self.add_old_item_row()
+                row = self.old_item_rows[-1]
+
+            item_index = row["item"].findData(saved["Item_ID"])
+            if item_index >= 0:
+                row["item"].setCurrentIndex(item_index)
+            row["gross"].setValue(number(saved["Gross_weight"]))
+            row["touch"].setValue(number(saved["Tounch"]))
+            row["actual_amount"].setValue(number(saved["Amount"]))
+
+        if not self.new_item_rows:
+            self.add_new_item_row()
+        if not self.old_item_rows:
+            self.add_old_item_row()
+        self.recalculate_totals()
+
+    def save_exchange(self):
+        if self.party_input.currentData() is None:
+            QMessageBox.warning(self, "Select Party", "Please select a customer or vendor.")
+            return
+
+        new_lines = []
+        old_lines = []
+        try:
+            for row in self.new_item_rows:
+                line = self.calculate_line(row)
+                if line["item_id"] is None:
+                    raise ValueError("Select a new item in every row.")
+                if line["gross"] <= 0:
+                    raise ValueError("New item gross weight must be greater than zero.")
+                new_lines.append(line)
+
+            for row in self.old_item_rows:
+                line = self.calculate_line(row)
+                if line["item_id"] is None:
+                    raise ValueError("Select an old item in every row.")
+                if line["gross"] <= 0:
+                    raise ValueError("Old item gross weight must be greater than zero.")
+                old_lines.append(line)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Check Exchange", str(exc))
+            return
+
+        direction = self.direction_input.currentText()
+        settlement = self.settlement_input.currentText()
+        cash_amount = self.cash_input.value()
+
+        customer_id = self.party_input.currentData() if self.party_type.currentText() == "Customer" else None
+        vendor_id = self.party_input.currentData() if self.party_type.currentText() == "Vendor" else None
+
+        new_fine_total = sum(l["fine"] for l in new_lines)
+        old_fine_total = sum(l["fine"] for l in old_lines)
+        new_amount_total = sum(l["amount"] for l in new_lines)
+        old_amount_total = sum(l["amount"] for l in old_lines)
+        exchange_fee = new_amount_total - old_amount_total - cash_amount
+
+        try:
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                if self.transaction_id is None:
+                    cursor.execute("""
+                        INSERT INTO Transactions (
+                            Date, "Transaction Type", "Customer ID", "Vendor ID",
+                            Settlement, "Total Weight", "Total Amount", "Total Weight Exchange", Direction, "Exchange Fee"
+                        ) VALUES (?, 'Exchange', ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        self.date_input.date().toString("yyyy-MM-dd"),
+                        customer_id, vendor_id, settlement,
+                        new_fine_total, cash_amount, old_fine_total, direction, exchange_fee
+                    ))
+                    transaction_id = cursor.lastrowid
+                else:
+                    transaction_id = self.transaction_id
+                    cursor.execute('DELETE FROM Ledger WHERE "Transaction ID" = ?', (transaction_id,))
+                    cursor.execute('DELETE FROM Inventory WHERE "Transaction ID" = ?', (transaction_id,))
+                    cursor.execute("""
+                        UPDATE Transactions SET Date = ?, "Customer ID" = ?, "Vendor ID" = ?,
+                        Settlement = ?, "Total Weight" = ?, "Total Amount" = ?, "Total Weight Exchange" = ?, Direction = ?, "Exchange Fee" = ?
+                        WHERE ID = ?
+                    """, (
+                        self.date_input.date().toString("yyyy-MM-dd"),
+                        customer_id, vendor_id, settlement,
+                        new_fine_total, cash_amount, old_fine_total, direction, exchange_fee, transaction_id
+                    ))
+                    cursor.execute("DELETE FROM Transaction_items WHERE Transaction_ID = ?", (transaction_id,))
+
+                # Insert New Items & Inventory movements
+                for line in new_lines:
+                    cursor.execute("""
+                        INSERT INTO Transaction_items (
+                            Transaction_ID, Item_name, Rate, Gross_weight, Tounch,
+                            Making, Net_weight, Calculated_amount, Amount, Discount, Type, Section, Item_ID
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exchange', 'New', ?)
+                    """, (
+                        transaction_id, line["item_name"], 0, line["gross"],
+                        line["touch"], 0, line["fine"], 0,
+                        line["amount"], 0, line["item_id"]
+                    ))
+                    mov_weight = -abs(line["gross"]) if direction == "Debit" else abs(line["gross"])
+                    cursor.execute("""
+                        INSERT INTO Inventory ("Item ID", "Transaction ID", "Item Movement", Weight)
+                        VALUES (?, ?, 'Exchange (New)', ?)
+                    """, (line["item_id"], transaction_id, mov_weight))
+
+                # Insert Old Items & Inventory movements
+                for line in old_lines:
+                    cursor.execute("""
+                        INSERT INTO Transaction_items (
+                            Transaction_ID, Item_name, Rate, Gross_weight, Tounch,
+                            Making, Net_weight, Calculated_amount, Amount, Discount, Type, Section, Item_ID
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Exchange', 'Old', ?)
+                    """, (
+                        transaction_id, line["item_name"], 0, line["gross"],
+                        line["touch"], 0, line["fine"], 0,
+                        line["amount"], 0, line["item_id"]
+                    ))
+                    mov_weight = abs(line["gross"]) if direction == "Debit" else -abs(line["gross"])
+                    cursor.execute("""
+                        INSERT INTO Inventory ("Item ID", "Transaction ID", "Item Movement", Weight)
+                        VALUES (?, ?, 'Exchange (Old)', ?)
+                    """, (line["item_id"], transaction_id, mov_weight))
+
+                insert_exchange_ledger_entries(
                     cursor=cursor,
                     transaction_id=transaction_id,
                     customer_id=customer_id,
                     vendor_id=vendor_id,
+                    direction=direction,
                     settlement=settlement,
-                    full_amount=full_amount,
-                    fine_total=fine_total,
-                    amount_to_store=amount_to_store,
+                    cash_amount=cash_amount,
+                    new_fine_total=new_fine_total,
+                    old_fine_total=old_fine_total,
+                    exchange_fee=exchange_fee,
                 )
-
                 conn.commit()
 
             self.saved = True
-
-            QMessageBox.information(
-                self,
-                "Purchase Saved",
-                f"Purchase #{transaction_id} saved successfully.",
-            )
-
+            QMessageBox.information(self, "Exchange Saved", f"Exchange #{transaction_id} saved successfully.")
             self.accept()
-
         except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Could Not Save Purchase",
-                "The purchase was not saved. Database changes were rolled back.\n\n"
-                f"Details: {exc}",
-            )
+            QMessageBox.critical(self, "Could Not Save Exchange", f"Error: {exc}")
